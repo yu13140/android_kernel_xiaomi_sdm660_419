@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
+#include <linux/binfmts.h>
 #include <linux/lsm_hooks.h>
 #endif
 #include <linux/mm.h>
@@ -207,9 +208,9 @@ static void disable_seccomp(void)
 	// disable seccomp
 #if defined(CONFIG_GENERIC_ENTRY) &&                                           \
 	LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-	current_thread_info()->syscall_work &= ~SYSCALL_WORK_SECCOMP;
+	clear_syscall_work(SECCOMP);
 #else
-	current_thread_info()->flags &= ~(TIF_SECCOMP | _TIF_SECCOMP);
+	clear_thread_flag(TIF_SECCOMP);
 #endif
 
 #ifdef CONFIG_SECCOMP
@@ -1184,15 +1185,6 @@ void susfs_try_umount_all(uid_t uid) {
 	try_umount("/data/adb/modules", false, MNT_DETACH, uid);
 	/* For both Legacy KSU and Magic Mount KSU */
 	try_umount("/debug_ramdisk", true, MNT_DETACH, uid);
-	try_umount("/sbin", true, MNT_DETACH, uid);
-	try_umount("/oem", true, MNT_DETACH, uid);
-
-	// try umount hosts file
-	try_umount("/system/etc/hosts", false, MNT_DETACH, uid);
-
-	// try umount lsposed dex2oat bins
-	try_umount("/apex/com.android.art/bin/dex2oat64", false, MNT_DETACH, uid);
-	try_umount("/apex/com.android.art/bin/dex2oat32", false, MNT_DETACH, uid);
 }
 #endif
 
@@ -1256,22 +1248,13 @@ do_umount:
 	// filter the mountpoint whose target is `/data/adb`
 	try_umount("/odm", true, 0);
 	try_umount("/system", true, 0);
-	try_umount("/system_ext", true, 0);
 	try_umount("/vendor", true, 0);
 	try_umount("/product", true, 0);
+	try_umount("/system_ext", true, 0);
 	try_umount("/data/adb/modules", false, MNT_DETACH);
 
 	// try umount ksu temp path
 	try_umount("/debug_ramdisk", false, MNT_DETACH);
-	try_umount("/sbin", false, MNT_DETACH);
-	try_umount("/oem", false, MNT_DETACH);
-
-	// try umount hosts file
-	try_umount("/system/etc/hosts", false, MNT_DETACH);
-
-	// try umount lsposed dex2oat bins
-	try_umount("/apex/com.android.art/bin/dex2oat64", false, MNT_DETACH);
-	try_umount("/apex/com.android.art/bin/dex2oat32", false, MNT_DETACH);
 #endif // #ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
 
 	get_task_struct(current);
@@ -1347,9 +1330,9 @@ int ksu_handle_setuid(struct cred *new, const struct cred *old)
 	// filter the mountpoint whose target is `/data/adb`
 	try_umount("/odm", true, 0);
 	try_umount("/system", true, 0);
-	try_umount("/system_ext", true, 0);
 	try_umount("/vendor", true, 0);
 	try_umount("/product", true, 0);
+	try_umount("/system_ext", true, 0);
 	try_umount("/data/adb/modules", false, MNT_DETACH);
 
 	// try umount ksu temp path
@@ -1467,7 +1450,49 @@ int ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 }
 #endif
 
+#ifdef CONFIG_COMPAT
+bool ksu_is_compat __read_mostly = false;
+#endif
+
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
+
+int ksu_bprm_check(struct linux_binprm *bprm)
+{
+	char *filename = (char *)bprm->filename;
+
+#ifndef CONFIG_KSU_KPROBES_HOOK
+	if (likely(!ksu_execveat_hook))
+		return 0;
+#endif
+
+/*
+ * 32-on-64 compat detection 
+ *
+ * notes:
+ * bprm->buf provides the binary itself !!
+ * https://unix.stackexchange.com/questions/106234/determine-if-a-specific-process-is-32-or-64-bit
+ * buf[0] == 0x7f && buf[1] == 'E' &&  buf[2] == 'L' && buf[3] == 'F' 
+ * so as that said, we check ELF header, then we check 5th byte, 0x01 = 32-bit, 0x02 = 64 bit
+ * we only check first execution of /data/adb/ksud and while ksu_execveat_hook is open!
+ * 
+ */
+#ifdef CONFIG_COMPAT
+	static bool compat_check_done __read_mostly = false;
+	if ( unlikely(!compat_check_done) && unlikely(!strcmp(filename, "/data/adb/ksud"))
+		&& !memcmp(bprm->buf, "\x7f\x45\x4c\x46", 4) ) {
+		if (bprm->buf[4] == 0x01 )
+			ksu_is_compat = true;
+		pr_info("%s: %s ELF magic found! ksu_is_compat: %d \n", __func__, filename, ksu_is_compat);
+		compat_check_done = true;
+	}
+#endif
+
+	ksu_handle_pre_ksud(filename);
+
+	return 0;
+
+}
+
 static int ksu_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 			  unsigned long arg4, unsigned long arg5)
 {
@@ -1489,6 +1514,7 @@ static int ksu_task_fix_setuid(struct cred *new, const struct cred *old,
 
 #ifndef MODULE
 static struct security_hook_list ksu_hooks[] = {
+	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
 	LSM_HOOK_INIT(task_prctl, ksu_task_prctl),
 	LSM_HOOK_INIT(inode_rename, ksu_inode_rename),
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),

@@ -123,7 +123,6 @@ int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
 	if (unlikely(!filename_user)) {
 		return 0;
 	}
-
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 	char path[sizeof(su) + 1] = {0};
 #else
@@ -178,7 +177,6 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 
 	if (likely(memcmp(filename->name, su, sizeof(su))))
 		return 0;
-
 #ifndef CONFIG_KSU_SUSFS_SUS_SU
 	if (!ksu_is_allow_uid(current_uid().val))
 		return 0;
@@ -196,6 +194,7 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 			       void *__never_use_argv, void *__never_use_envp,
 			       int *__never_use_flags)
 {
+	//const char su[] = SU_PATH;
 #ifdef CONFIG_KSU_SUSFS_SUS_SU
 	char path[sizeof(su) + 1] = {0};
 #else
@@ -210,7 +209,6 @@ int ksu_handle_execve_sucompat(int *fd, const char __user **filename_user,
 
 	if (unlikely(!filename_user))
 		return 0;
-
 #ifndef CONFIG_KSU_SUSFS_SUS_SU
 	memset(path, 0, sizeof(path));
 #endif
@@ -409,4 +407,3 @@ void ksu_susfs_enable_sus_su(void) {
 	susfs_sus_su_working_mode = SUS_SU_WITH_HOOKS;
 }
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_SU
-

@@ -378,6 +378,7 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 		return 0;
 	}
 #endif
+
 	// if success, we modify the arg5 as result!
 	u32 *result = (u32 *)arg5;
 	u32 reply_ok = KERNEL_SU_OPTION;
@@ -969,6 +970,24 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			return 0;
 		}
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_SU
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+		if (arg2 == CMD_SUSFS_ADD_SUS_MAP) {
+			int error = 0;
+			if (!ksu_access_ok((void __user*)arg3, sizeof(struct st_susfs_sus_map))) {
+					pr_err("susfs: CMD_SUSFS_ADD_SUS_MAP -> arg3 is not accessible\n");
+					return 0;
+			}
+			if (!ksu_access_ok((void __user*)arg5, sizeof(error))) {
+					pr_err("susfs: CMD_SUSFS_ADD_SUS_MAP -> arg5 is not accessible\n");
+					return 0;
+			}
+			error = susfs_add_sus_map((struct st_susfs_sus_map __user*)arg3);
+			pr_info("susfs: CMD_SUSFS_ADD_SUS_MAP -> ret: %d\n", error);
+			if (copy_to_user((void __user*)arg5, &error, sizeof(error)))
+					pr_info("susfs: copy_to_user() failed\n");
+			return 0;
+		}
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
 		if (arg2 == CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING) {
 			int error = 0;
 			if (arg3 != 0 && arg3 != 1) {
@@ -1237,9 +1256,9 @@ do_umount:
 	// filter the mountpoint whose target is `/data/adb`
 	try_umount("/odm", true, 0);
 	try_umount("/system", true, 0);
+	try_umount("/system_ext", true, 0);
 	try_umount("/vendor", true, 0);
 	try_umount("/product", true, 0);
-	try_umount("/system_ext", true, 0);
 	try_umount("/data/adb/modules", false, MNT_DETACH);
 
 	// try umount ksu temp path
